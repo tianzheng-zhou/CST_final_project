@@ -32,12 +32,13 @@ class Tensor:
     @staticmethod
     def activate_function(x):
         """
-        激活函数：暂时使用sigmoid函数
+        激活函数：暂时使用RELU函数
         也可以使用其他激活函数，如ReLU、tanh等。
         :param x: 输入值
         :return: 激活后的值
         """
         return 1 / (1 + np.exp(-x))  # sigmoid函数实现
+        # return np.where(x > 0, x, 0.01 * x)  # ReLU函数实现
 
     @staticmethod
     def d_activate_function(x):
@@ -49,6 +50,7 @@ class Tensor:
         """
         s = 1 / (1 + np.exp(-x))  # 复用sigmoid函数计算
         return s * (1 - s)  # 导数公式 σ'(x) = σ(x)(1-σ(x))
+        # return np.where(x > 0, 1, 0.01)  # ReLU函数的导数实现
 
     def __add__(self, other):
         # 加法运算
@@ -308,11 +310,175 @@ class Tensor:
         else:
             print("Error: dot_backward only works for dot operation.")
 
+    def convolution_forward(self, kernel, stride=1):
+        """
+        卷积运算，专门用于卷积神经网络
+        :param kernel: 卷积核
+        :param stride: 步长
+        :return: 返回卷积后的结果
+        """
+        if isinstance(kernel, Tensor):
+            # 计算输出形状
+            out_height = (self.data.shape[0] - kernel.data.shape[0]) // stride + 1
+            out_width = (self.data.shape[1] - kernel.data.shape[1]) // stride + 1
+
+            # 初始化输出矩阵
+            data_temp = np.zeros((out_height, out_width))
+
+            # 卷积运算
+            # 根据原数据 卷积核 步长决定卷积结果
+            for i in range(0, self.data.shape[0] - kernel.data.shape[0] + 1, stride):
+                for j in range(0, self.data.shape[1] - kernel.data.shape[1] + 1, stride):
+                    # 卷积运算
+                    temp = self.data[i:i + kernel.data.shape[0], j:j + kernel.data.shape[1]] * kernel.data
+                    # 求和
+                    temp = np.sum(temp)
+                    # 存储到卷积后的结果中
+                    data_temp[i][j] = temp
+
+            out = Tensor(data_temp, requires_grad=True)
+            out.op = 'convolution'
+            out.parents = [self, kernel, stride]
+
+            return out
+
+        else:
+            print("error: kernel is not a Tensor")
+
+    def convolution_backward(self):
+        """
+        卷积运算的反向传播
+        :return:
+        """
+        if self.op == "convolution":
+            if self.parents[0].requires_grad:
+                # 对输入的图像矩阵进行处理
+                # 这里的处理方式是将卷积核旋转180度，然后进行卷积运算
+                # 首先需要将自己的梯度扩展出去
+
+                # temp_self_grad是这次卷积计的输入部分
+                temp_self_grad = np.pad(self.grad, pad_width=self.parents[1].data.shape[0] - 1,
+                                        mode='constant', constant_values=0)
+
+                # 然后将卷积核旋转180度
+                temp_kernel = np.rot90(self.parents[1].data, 2)
+
+                # 然后进行卷积运算
+                # 这是卷积计算的输出值
+                # 长度：输入值减去卷积核长度+1
+                data_temp = np.zeros(((temp_self_grad.shape[0] - temp_kernel.shape[0] + 1) // self.parents[2],
+                                     (temp_self_grad.shape[1] - temp_kernel.shape[1] + 1) // self.parents[2]))
+
+                for i in range(0, temp_self_grad.shape[0] - temp_kernel.shape[0] + 1, self.parents[2]):
+                    for j in range(0, temp_self_grad.shape[1] - temp_kernel.shape[1] + 1, self.parents[2]):
+                        # 卷积运算
+                        temp = temp_self_grad[i:i + temp_kernel.shape[0], j:j + temp_kernel.shape[1]] * temp_kernel
+                        # 求和
+                        temp = np.sum(temp)
+                        # 存储到卷积后的结果中
+                        data_temp[i][j] = temp
+
+                # 将卷积后的结果存储到parents[0]的梯度数值中
+                if self.parents[0].grad is None:
+                    self.parents[0].grad = data_temp
+                else:
+                    self.parents[0].grad += data_temp
+
+            # 接下来处理卷积核的梯度
+            if self.parents[1].requires_grad:
+                # 卷积核梯度初始化
+                if self.parents[1].grad is None:
+                    self.parents[1].grad = np.zeros_like(self.parents[1].data)
+
+                # 可能需要遍历卷积核
+
+                for i in range(self.parents[1].data.shape[0]):
+                    for j in range(self.parents[1].data.shape[1]):
+                        # 缓存卷积结果的长度
+                        res_len = self.data.shape[0]
+
+                        # 卷积核对结果的影响还是蛮大的，卷积核的梯度为卷积结果与原图相应的部分相乘后求和
+                        grad_temp = self.parents[0].data[i:i + res_len, j:j + res_len] * self.grad
+                        self.parents[1].grad[i][j] = np.sum(grad_temp)
+
+                # 暂时不支持多个梯度返回到一个卷积核
+                """
+                if self.parents[1].grad is None:
+                    self.parents[1].grad = self.grad * self.parents[0].data
+                else:
+                    self.parents[1].grad += self.grad * self.parents[0].data
+                """
+
+        else:
+
+            print("Error: convolution_backward only works for convolution operation.")
+
+    def max_pooling_forward(self, pooling_size=(2, 2)):
+        """
+        max池化运算，专门用于卷积神经网络
+        :param pooling_size: 池化核大小
+        """
+        # 池化输出结果缓存
+        pooling_temp = np.zeros((self.data.shape[0] // pooling_size[0], self.data.shape[1] // pooling_size[1]))
+
+        # 记录每个窗口最大值位置的掩码矩阵，用于反向传播
+        max_mask = np.zeros_like(self.data)
+
+        for i in range(0, self.data.shape[0], pooling_size[0]):
+            for j in range(0, self.data.shape[1], pooling_size[1]):
+                # 获取当前池化窗口
+                window = self.data[i:i + pooling_size[0], j:j + pooling_size[1]]
+
+                # 找到最大值和其在窗口内的相对位置
+                max_val = np.max(window)
+                max_pos = np.unravel_index(np.argmax(window), window.shape)
+
+                # 存储池化结果
+                pooling_temp[i // pooling_size[0], j // pooling_size[1]] = max_val
+
+                # 在原始数据位置记录最大值位置(1表示最大值位置)
+                max_mask[i + max_pos[0], j + max_pos[1]] = 1
+
+        # 创建池化后的Tensor对象
+        out = Tensor(pooling_temp, requires_grad=True)
+        out.op = 'max_pooling'
+        out.parents = [self, max_mask, pooling_size]
+        return out
+
+    def max_pooling_backward(self):
+        """
+        max池化运算的反向传播
+        :return:
+        """
+        if self.op == "max_pooling":
+            if self.parents[0].requires_grad:
+                # 初始化梯度矩阵
+                grad_input = np.zeros_like(self.parents[0].data)
+
+                # 获取池化参数
+                pooling_size = self.parents[2]
+                max_mask = self.parents[1]
+
+                # 将梯度分配到前向传播时最大值的位置
+                for i in range(0, self.parents[0].data.shape[0], pooling_size[0]):
+                    for j in range(0, self.parents[0].data.shape[1], pooling_size[1]):
+                        # 获取当前池化区域
+                        region = max_mask[i:i + pooling_size[0], j:j + pooling_size[1]]
+                        # 将梯度分配到最大值位置
+                        grad_input[i:i + pooling_size[0], j:j + pooling_size[1]] = \
+                            (region * self.grad[i // pooling_size[0], j // pooling_size[1]])
+
+                # 更新父节点的梯度
+                if self.parents[0].grad is None:
+                    self.parents[0].grad = grad_input
+                else:
+                    self.parents[0].grad += grad_input
+
     def auto_backward(self):
         """
         通过self.op标签中的字符串决定反向传播类型
 
-        注意：自动反向传播只支持add, sub, mul, pow, activate, dot操作
+        注意：自动反向传播只支持add, sub, mul, pow, activate, dot, convolution, max_pooling操作
 
         ps:不过嘛 auto的东西还是尽量不要用了啦
 
@@ -330,23 +496,23 @@ class Tensor:
             self.activate_backward()
         elif self.op == "dot":
             self.dot_backward()
+        elif self.op == "convolution":
+            self.convolution_backward()
+        elif self.op == "max_pooling":
+            self.max_pooling_backward()
         else:
             print("Error: auto_backward only works for add, sub, mul, pow, activate, dot operation.")
 
 
-class TensorNetwork:
-    """
-    这个类用于构建神经网络的测试范例。
-    将手写数字识别问题作为全连接神经网络的输入和输出进行测试。
-    其中，使用MNIST数据集作为输入
-    数据集存储在data文件夹目录下
-    """
-    def __init__(self, depth, layer_size: tuple):
+class FCNN:
+    # Fully Connected Neural Network
+    def __init__(self, depth: int, layer_size: tuple, input_size: int):
         # 注意：layer_size最后一层应当为10
+        # depth是屎山，应该去掉的，懒得改了
 
         # 初始化网络
         self.label = None
-        self.input = np.ones(784)  # 输入向量，784维（28x28图像展开）
+        self.input = None  # 输入向量，784维（28x28图像展开）
         self.cost = 0  # 损失值
 
         # 定义隐藏层层数
@@ -365,7 +531,7 @@ class TensorNetwork:
 
         for _ in range(depth):
             if _ == 0:
-                self.weights.append(Tensor(np.random.randn(layer_size[_], 784) * np.sqrt(2. / 784), requires_grad=True))
+                self.weights.append(Tensor(np.random.randn(layer_size[_], input_size) * np.sqrt(2. / input_size), requires_grad=True))
             else:
                 self.weights.append(
                     Tensor(np.random.randn(layer_size[_], layer_size[_ - 1]) * np.sqrt(2. / layer_size[_ - 1]),
@@ -377,16 +543,24 @@ class TensorNetwork:
         for _ in range(depth):
             self.biases.append(Tensor(np.zeros(layer_size[_]).reshape(-1, 1), requires_grad=True))
 
-    def forward(self, input: np.ndarray):
+    def forward(self, input, input_required_grad: bool = False):
         """
         前向传播函数
-        :param input: 作为神经网络的输入向量
+        :param input_required_grad: 选择是否计算输入的梯度，默认为False，用于兼容其他类型网络
+        :param input: 作为神经网络的输入向量，可以是numpy数组或Tensor对象 注意：Tensor对象一定要reshape一下哟
         :return: 无
         """
-        self.input = Tensor(input.reshape(-1, 1), requires_grad=False)  # 保存输入数据
+        # 处理输入数据
+        if isinstance(input, Tensor):
+            self.input = input  # 保存输入数据
+        else:
+            self.input = Tensor(input.reshape(-1, 1), requires_grad=input_required_grad)  # 保存输入数据
 
         # 处理第一层神经
-        self.layers[0] = ((self.weights[0].dot_forward(Tensor(input, requires_grad=False))
+        """self.layers[0] = ((self.weights[0].dot_forward(Tensor(input, requires_grad=input_required_grad))
+                           + self.biases[0])
+                          .activate_forward())"""
+        self.layers[0] = ((self.weights[0].dot_forward(self.input)
                            + self.biases[0])
                           .activate_forward())
         self.layers[0].requires_grad = True
@@ -425,7 +599,7 @@ class TensorNetwork:
 
         # 反向传播至各隐藏层（从倒数第二层开始）
         for i in range(self.depth - 1, -1, -1):
-            self.layers[i].activate_backward()  # 返回到激活前
+            self.layers[i].activate_backward()  # 返回到激活前 激活前的对象获取梯度
             self.layers[i].parents[0].add_backward()  # 返回到Wa 和 b
             self.layers[i].parents[0].parents[0].dot_backward()  # Wa 返回到 W 和 a
 
@@ -434,67 +608,80 @@ class TensorNetwork:
             self.weights[i].data -= learning_rate * self.weights[i].grad
             self.biases[i].data -= learning_rate * self.biases[i].grad
 
+    def erase_grad(self):
+        """
+        清空梯度
+        :return:
+        """
         # 清空梯度
         for i in range(self.depth):
             self.weights[i].grad = None
             self.biases[i].grad = None
+            self.layers[i].grad = None
+        self.cost.grad = None
+        # 清空输入数据
+        self.input.grad = None
 
-    @staticmethod
-    def read_images(filepath):
-        """
-        读取MNIST图像文件
-        :param filepath: 文件路径
-        :return: 图像数据 (样本数, 行, 列)
-        """
-        # 读取MNIST图像文件
-        with open(filepath, 'rb') as f:
-            magic, num, rows, cols = struct.unpack('>IIII', f.read(16))
-            assert magic == 0x00000803, "Invalid image file format"
-            # 一次性读取所有图像数据并转换为numpy数组
-            images = np.frombuffer(f.read(num * rows * cols), dtype=np.uint8)
-            return images.reshape(num, rows, cols)  # 转换为三维数组 (样本数, 行, 列)
 
-    @staticmethod
-    def read_labels(filepath):
-        """
-        读取MNIST标签文件
-        :param filepath: 文件路径
-        :return: 标签数据 (样本数,)
-        """
-        with open(filepath, 'rb') as f:
-            magic, num = struct.unpack('>II', f.read(8))
-            assert magic == 0x00000801, "Invalid label file format"
-            # 读取所有标签数据并转换为numpy数组
-            return np.frombuffer(f.read(num), dtype=np.uint8)
+def read_images(filepath):
+    """
+    读取MNIST图像文件
+    :param filepath: 文件路径
+    :return: 图像数据 (样本数, 行, 列)
+    """
+    # 读取MNIST图像文件
+    with open(filepath, 'rb') as f:
+        magic, num, rows, cols = struct.unpack('>IIII', f.read(16))
+        assert magic == 0x00000803, "Invalid image file format"
+        # 一次性读取所有图像数据并转换为numpy数组
+        images = np.frombuffer(f.read(num * rows * cols), dtype=np.uint8)
+        return images.reshape(num, rows, cols)  # 转换为三维数组 (样本数, 行, 列)
+
+
+def read_labels(filepath):
+    """
+    读取MNIST标签文件
+    :param filepath: 文件路径
+    :return: 标签数据 (样本数,)
+    """
+    with open(filepath, 'rb') as f:
+        magic, num = struct.unpack('>II', f.read(8))
+        assert magic == 0x00000801, "Invalid label file format"
+        # 读取所有标签数据并转换为numpy数组
+        return np.frombuffer(f.read(num), dtype=np.uint8)
 
 
 if __name__ == '__main__':
-    # 测试手写数字识别神经网络
+    # DEBUG = False  # 没啥用，用于显示过程
+
     # 读取MNIST数据
-    train_images = TensorNetwork.read_images('data\\train-images.idx3-ubyte')
-    train_labels = TensorNetwork.read_labels('data\\train-labels.idx1-ubyte')
+    train_images = read_images('data\\train-images.idx3-ubyte')
+    train_labels = read_labels('data\\train-labels.idx1-ubyte')
 
-    test_images = TensorNetwork.read_images('data\\t10k-images.idx3-ubyte')
-    test_labels = TensorNetwork.read_labels('data\\t10k-labels.idx1-ubyte')
+    test_images = read_images('data\\t10k-images.idx3-ubyte')
+    test_labels = read_labels('data\\t10k-labels.idx1-ubyte')
 
-    network = TensorNetwork(depth=3, layer_size=(50, 40, 10))
+    network = FCNN(depth=2, layer_size=(10,10), input_size=784)
 
     # 训练60000张图片
-    for i in range(60000):
+    for i in range(6000):
         one_hot = np.zeros(10)
         one_hot[train_labels[i]] = 1
         temp = []
         for j in range(28):
             temp += list(train_images[i][j])
 
-        network.forward(np.array(temp) / 255)
-        network.backward(np.array(one_hot), 0.1)
-        # print(network.cost)
+        network.forward(Tensor(np.array(temp) / 255, requires_grad=True))
+
+        # network.forward(np.array(temp) / 255, True)
+        network.backward(np.array(one_hot), 0.003)
+        network.erase_grad()
+        print(network.cost)
 
     # 10000张图片用于验证
     # count 用于记录正确的数量
     count = 0
-    for i in range(10000):
+    for i in range(1000):
         one_hot = np.zeros(10)
         one_hot[test_labels[i]] = 1
         temp = []
@@ -507,4 +694,4 @@ if __name__ == '__main__':
             count += 1
 
     # 输出正确率
-    print(count / 10000)
+    print(count / 1000)
