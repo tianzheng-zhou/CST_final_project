@@ -3,6 +3,16 @@ import numpy as np
 
 
 class CNN:
+    """
+    卷积神经网络
+    包含两个卷积层和一个全连接层（全连接层基于FCNN类实现）
+
+    卷积层的卷积核大小为5*5和3*3，池化大小都为2*2
+    全连接层的输入大小为25，输出大小为10
+
+    为了适配卷积神经网络，我在Tensor类中添加了对卷积和池化运算的支持
+    添加了convolution_forward(),convolution_backward(),max_pooling_forward(),max_pooling_backward()
+    """
     def __init__(self):
         # 卷积核大小，池化大小
 
