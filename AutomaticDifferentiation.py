@@ -618,7 +618,8 @@ class FCNN:
             self.weights[i].grad = None
             self.biases[i].grad = None
             self.layers[i].grad = None
-        self.cost.grad = None
+        if not isinstance(self.cost, int):
+            self.cost.grad = None
         # 清空输入数据
         self.input.grad = None
 
